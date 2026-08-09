@@ -50,7 +50,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 // Sample Count Significance: Duration and resolution, not information content
                 // More number of Samples != Richer signal
-                Text("Samples recorded: \(motionManager.sampleCount)")
+                Text("Samples recorded so far: \(motionManager.sampleCount)")
                 Text("Attitude")
                     .font(.headline)
                 Text("pitch: \(motionManager.attitude.pitch, specifier: "%.3f")")
