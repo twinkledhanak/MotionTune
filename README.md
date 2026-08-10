@@ -65,7 +65,23 @@ iOS audio plugins / synthesis  ──  AVAudioEngine real-time DSP rendering
 
 ### Real-time on-device inference with ZETIC AI
 
-The melody-refinement model runs **entirely on-device** using **ZETIC Melange** (formerly MLange). Melange takes the trained model, automatically compiles and quantizes it for the Apple Neural Engine, and exposes a simple Swift API — the raw curves go in, the "good" curves come out, and **no data ever leaves the device**. Model binaries are downloaded once and cached; inference executes on the NPU with zero-copy memory mapping.
+The melody-refinement model runs entirely on-device using ZETIC Melange (formerly MLange). Melange takes the trained model, automatically compiles and quantizes it for the Apple Neural Engine, and exposes a simple Swift API — the raw curves go in, the "good" curves come out, and no data ever leaves the device. Model binaries are downloaded once and cached; inference executes on the NPU with zero-copy memory mapping.
+
+### Model deployment pipeline
+
+1. **Train** — the CurveTransformer model is trained offline (see `training/`) and exported as a CPU-safe PyTorch Exported Program (`.pt2`), along with a sample input `.npy` file defining the fixed input shape.
+2. **Upload** — the `.pt2` and sample input are uploaded to the [Zetic Melange Dashboard](https://mlange.zetic.ai), which compiles the model into a static NPU-targeted graph.
+3. **Optimize** — Melange benchmarks the compiled model across real devices to select the best-performing binary per hardware target.
+4. **Integrate** — once optimization completes, the model is available via the `ZeticMLangeiOS` SDK, referenced by name/version:
+```swift
+   let model = try ZeticMLangeModel(
+       personalKey: PERSONAL_KEY,
+       name: "twinkledhanak/MotionTune",
+       version: 4,
+       modelMode: .RUN_AUTO
+   )
+```
+5. **Run inference** — at runtime, the app loads the compiled binary automatically and runs it directly on the Neural Engine, no manual conversion step needed on-device.
 
 **References (ZETIC Melange):**
 - [ZETIC Melange — documentation home](https://docs.zetic.ai/)
