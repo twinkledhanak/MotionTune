@@ -9,7 +9,7 @@ Turn your phone's motion into music. Move the device like a theremin: tilt for p
 
 ## Introduction
 
-MotionTune is a motion-controlled music instrument for iOS. The iPhone's built-in motion sensors replace a traditional instrument interface: instead of keys, strings, or buttons, you *perform* by moving the device in space. The app captures those gestures, maps them into three-dimensional MIDI curves (pitch, expression, and modulation), and renders them in real time as an expressive instrument — with an optional AI-refined "melody" pass that snaps the performance to a musical scale.
+MotionTune is a motion-controlled music instrument for iOS. The iPhone's built-in motion sensors replace a traditional instrument interface: instead of keys, strings, or buttons, you *perform* by moving the device in space. The app captures those gestures, maps them into three-dimensional MIDI curves (pitch, expression, and modulation), and renders them in real time as an expressive instrument — with an optional AI-refined "melody" pass that snaps the performance to a musical scale. This app is heavily inspired from the idea of '[Sonification](https://www.perkins.org/resource/sonification-sounds-meaning-activity/)'.
 
 Everything runs on-device. Sensors are sampled locally, MIDI curves are produced locally, and inference (see [Technical implementation](#technical-implementation)) executes via SDK integration with Zetic AI — no network connection, no cloud round-trip.
 
