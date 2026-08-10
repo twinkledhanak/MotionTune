@@ -144,4 +144,18 @@ final class MotionManager: ObservableObject {
         motionManager.stopDeviceMotionUpdates()
         isTracking = false
     }
+
+    /// Cancels whatever has been recorded so far and lets the user start over.
+    func reset() {
+        stop()
+        sampleCount = 0
+        pitchSeries.removeAll()
+        gravitySeries.removeAll()
+        rotationSeries.removeAll()
+        accelYSeries.removeAll()
+        rollSeries.removeAll()
+        pitchBendSeries.removeAll()
+        cc11Series.removeAll()
+        cc1Series.removeAll()
+    }
 }
