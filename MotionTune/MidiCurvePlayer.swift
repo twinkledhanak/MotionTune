@@ -13,6 +13,12 @@ enum Instrument: String, CaseIterable, Identifiable {
 final class MidiCurvePlayer: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published var instrument: Instrument = .theremin
+    // Playback progress (0...1) and whether the loaded series is the quantized
+    // melody path; the UI uses both to drive per-button progress rings.
+    @Published private(set) var progress: Double = 0
+    @Published private(set) var isMelodyPlayback = false
+    private var progressTimer: Timer?
+    private var currentProgress: Double = 0
 
     private let engine = AVAudioEngine()
     private let baseFrequency: Double = 261.63
@@ -82,6 +88,16 @@ final class MidiCurvePlayer: ObservableObject {
     private var padFadeTarget: Double = 0
     private var padPendingChord = -1
     private var padReleaseRequested = false
+    // Pad dynamics: follows expression (CC11) with a fast attack and a ~0.4s
+    // release, so the pad settles toward silence in quiet passages instead of
+    // droning at a constant mix. The floor keeps a soft bed during silences so
+    // the pad never pops in/out of the silence gate under motion jitter.
+    private var padDyn: Double = 0
+    private let padDynFloor: Double = 0.2
+
+    // Offline export: the take renders straight to a file in manual rendering
+    // mode (no hardware output), so sharing never plays the tune audibly.
+    private var isOfflineRender = false
 
     // Audio export: records the live mix to a file via a mixer tap, so the
     // exported WAV is exactly what's heard (melody + pad + pulse).
@@ -95,6 +111,7 @@ final class MidiCurvePlayer: ObservableObject {
     func loadSeries(pitchBend: [Int], cc11: [Int], cc1: [Int], roll: [Double] = [], quantized: Bool) {
         let count = min(pitchBend.count, min(cc11.count, cc1.count))
         guard count > 0 else { return }
+        isMelodyPlayback = quantized
 
         if quantized {
             // Narrow ladder (one octave) so each hand step is a small move, with
@@ -163,21 +180,31 @@ final class MidiCurvePlayer: ObservableObject {
     }
 
     /// Split the quantized pitch curve into note segments. A new note starts
-    /// where the pitch changes (plateau jump) or where CC11 dips below 60% of
-    /// its recent peak (the volume-hand separation a player uses between
-    /// notes) — which also re-strikes repeated same-pitch notes.
+    /// where the pitch changes (plateau jump) or where CC11 dips below 40% of
+    /// its recent peak for at least 200ms (the volume-hand separation a player
+    /// uses between notes) — which also re-strikes repeated same-pitch notes.
+    /// The depth+duration hysteresis ignores tremor micro-dips.
     private func segmentNotes(pitches: [Int], cc11: [Double]) {
         let count = pitches.count
         var onsetStep = [Int](repeating: 0, count: count)
         var currentOnset = 0
         let peakWindow = 20
+        let dipRatio = 0.4
+        let minDipSteps = 12
+        var dipStart = -1
         for i in 1..<count {
             if pitches[i] != pitches[i - 1] {
                 currentOnset = i
+                dipStart = -1
             } else if let peak = cc11[max(0, i - peakWindow)...i].max(), peak > 0.05 {
-                let dipLevel = 0.6 * peak
-                if cc11[i] < dipLevel && cc11[i - 1] >= dipLevel {
-                    currentOnset = i
+                let dipLevel = dipRatio * peak
+                if cc11[i] < dipLevel {
+                    if dipStart < 0 { dipStart = i }
+                    if i - dipStart + 1 >= minDipSteps {
+                        currentOnset = dipStart
+                    }
+                } else {
+                    dipStart = -1
                 }
             }
             onsetStep[i] = currentOnset
@@ -224,9 +251,13 @@ final class MidiCurvePlayer: ObservableObject {
         chordSteps[(step / stepsPerChord) % chordSteps.count]
     }
 
-    /// Snap a scale note toward the current chord's tones when it's a half-step
-    /// away (chord-tone weighting). Notes already on the chord stay put; the
-    /// correction is at most one scale step, so the melody never gets mangled.
+    /// Snap radius (semitones) for chord-tone snapping. Aggressive enough that a
+    /// continuous sweep collapses onto arpeggio tones (G-B-D / C-E-G / D-F#-A)
+    /// instead of running the whole scale in order.
+    private let chordSnapSemitones: Double = 3.0
+
+    /// Snap a scale note to the nearest chord tone. Every note within
+    /// `chordSnapSemitones` is pulled to the chord, so sweeps become arpeggios.
     private func snapToChord(_ note: Double, chordIndex: Int) -> Double {
         let chordPCs = Self.chordPitchClasses[chordIndex]
         let pc = Int(note.rounded()) % 12
@@ -243,7 +274,7 @@ final class MidiCurvePlayer: ObservableObject {
         if offset > 6 { offset -= 12 }
         if offset < -6 { offset += 12 }
         let chordNote = note + Double(offset)
-        return abs(chordNote - note) <= 1.0 ? chordNote : note
+        return abs(chordNote - note) <= chordSnapSemitones ? chordNote : note
     }
 
     private static func pitchClassDistance(_ a: Int, _ b: Int) -> Int {
@@ -278,6 +309,67 @@ final class MidiCurvePlayer: ObservableObject {
 
     func play() {
         guard !freqCurve.isEmpty, !isPlaying else { return }
+        resetForRender()
+        progressTimer?.invalidate()
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            guard let self, self.isPlaying else { return }
+            self.progress = min(1.0, self.currentProgress)
+        }
+        setupSourceIfNeeded()
+        do {
+            try engine.start()
+            isPlaying = true
+        } catch {
+            isPlaying = false
+        }
+    }
+
+    /// Export the current take to a WAV file by rendering offline in manual
+    /// rendering mode: the exact same DSP runs but writes straight to the file
+    /// with no hardware output, so sharing never plays the tune out loud (and
+    /// renders faster than real-time).
+    func exportToFile(to url: URL, completion: @escaping (Result<URL, Error>) -> Void) {
+        guard !freqCurve.isEmpty, !isPlaying else { return }
+        isOfflineRender = true
+        setupSourceIfNeeded()
+        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
+            try engine.start()
+            resetForRender()
+            isPlaying = true
+            let totalFrames = Double(freqCurve.count) * samplesPerCurveStep
+            let needed = Int(totalFrames + 0.2 * sampleRate)
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096)!
+            var rendered = 0
+            while rendered < needed {
+                let status = try engine.renderOffline(4096, to: buffer)
+                guard status == .success, buffer.frameLength > 0 else { break }
+                try file.write(from: buffer)
+                rendered += Int(buffer.frameLength)
+                progress = min(1.0, Double(rendered) / Double(needed))
+                // Let the main run loop process pending UI updates so the
+                // progress ring and waveform animate during export.
+                RunLoop.main.run(until: Date().addingTimeInterval(0.016))
+            }
+            engine.stop()
+            isPlaying = false
+            isOfflineRender = false
+            progress = 0
+            completion(.success(url))
+        } catch {
+            engine.stop()
+            isPlaying = false
+            isOfflineRender = false
+            progress = 0
+            completion(.failure(error))
+        }
+    }
+
+    /// Reset all render state to the start of the curve. Shared by live playback
+    /// and offline export so both produce identical audio.
+    private func resetForRender() {
         frameCount = 0
         phase = 0
         string2Phase = 0
@@ -297,38 +389,15 @@ final class MidiCurvePlayer: ObservableObject {
         padFadeTarget = 0
         padPendingChord = -1
         padReleaseRequested = false
-        setupSourceIfNeeded()
-        do {
-            try engine.start()
-            isPlaying = true
-        } catch {
-            isPlaying = false
-        }
-    }
-
-    func playForExport(to url: URL, completion: @escaping (Result<URL, Error>) -> Void) {
-        guard !freqCurve.isEmpty, !isPlaying else { return }
-        exportURL = url
-        exportCompletion = completion
-        let format = engine.mainMixerNode.outputFormat(forBus: 0)
-        do {
-            exportFile = try AVAudioFile(forWriting: url, settings: format.settings)
-        } catch {
-            exportURL = nil
-            exportCompletion = nil
-            completion(.failure(error))
-            return
-        }
-        engine.mainMixerNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
-            guard let self, let file = self.exportFile else { return }
-            try? file.write(from: buffer)
-        }
-        play()
+        padDyn = 0
+        progress = 0
+        currentProgress = 0
     }
 
     func stop() {
         if exportFile != nil {
-            engine.mainMixerNode.removeTap(onBus: 0)
+            sourceNode?.removeTap(onBus: 0)
+            engine.mainMixerNode.outputVolume = 1
             exportFile = nil
             exportURL = nil
             exportCompletion = nil
@@ -350,6 +419,11 @@ final class MidiCurvePlayer: ObservableObject {
         padFade = 0
         padFadeTarget = 0
         padPendingChord = -1
+        padDyn = 0
+        progressTimer?.invalidate()
+        progressTimer = nil
+        progress = 0
+        currentProgress = 0
         isPlaying = false
     }
 
@@ -383,6 +457,7 @@ final class MidiCurvePlayer: ObservableObject {
             var localPadFade = self.padFade
             var localPadFadeTarget = self.padFadeTarget
             var localPadPendingChord = self.padPendingChord
+            var localPadDyn = self.padDyn
             let localPadReleaseRequested = self.padReleaseRequested
 
             let isKeyboard = self.instrument == .piano
@@ -475,7 +550,8 @@ final class MidiCurvePlayer: ObservableObject {
                         localAccentPhase = 0
                     }
                     localAccentPhase += 2.0 * .pi * localAccentFreq / self.sampleRate
-                    let accEnv = localAccentVel * exp(-localPulseAge * self.pulseDecay) * self.pulseMix
+                    let pulseDecay = exp(-localPulseAge * self.pulseDecay)
+                    let accEnv = localAccentVel * (pulseDecay < 0.001 ? 0 : pulseDecay) * self.pulseMix
                     let accent = sin(localAccentPhase) * 0.6 + sin(2 * localAccentPhase) * 0.4
                     value += Float(accent * accEnv)
                 }
@@ -508,7 +584,20 @@ final class MidiCurvePlayer: ObservableObject {
                     } else if localPadFade > localPadFadeTarget {
                         localPadFade = max(localPadFadeTarget, localPadFade - slew)
                     }
-                    if localPadFade > 0.001 {
+                    // Dynamics envelope: fast attack, ~0.4s release, gated by expression.
+                    let dynAttack = (1.0 / 0.05) / self.sampleRate
+                    let dynRelease = (1.0 / 0.4) / self.sampleRate
+                    if localPadDyn < localAmp {
+                        localPadDyn = min(localAmp, localPadDyn + dynAttack)
+                    } else if localPadDyn > localAmp {
+                        localPadDyn = max(localAmp, localPadDyn - dynRelease)
+                    }
+                    // While playing, keep the pad above the floor instead of gating
+                    // it to silence in quiet passages (avoids the gate-flicker screech).
+                    if playing {
+                        localPadDyn = max(localPadDyn, self.padDynFloor)
+                    }
+                    if localPadFade > 0.001 && localPadDyn > 0.001 {
                         let root = self.chordRoots[localChordIdx]
                         let padFreq = 440.0 * pow(2.0, (Double(root) - 69.0) / 12.0)
                         let fifthFreq = padFreq * 3.0 / 2.0
@@ -518,7 +607,7 @@ final class MidiCurvePlayer: ObservableObject {
                         let pad = (sin(localChordPhases[localChordIdx * 3])
                             + 0.5 * sin(localChordPhases[localChordIdx * 3 + 1])
                             + 0.18 * sin(localChordPhases[localChordIdx * 3 + 2]))
-                            * self.padMix * localPadFade
+                            * self.padMix * localPadFade * localPadDyn
                         value += Float(pad)
                     }
                 }
@@ -542,6 +631,7 @@ final class MidiCurvePlayer: ObservableObject {
             }
 
             self.frameCount = localFrame
+            self.currentProgress = min(1.0, Double(localFrame) / totalFrames)
             self.phase = localPhase
             self.string2Phase = localString2Phase
             self.smoothFreq = localFreq
@@ -560,6 +650,7 @@ final class MidiCurvePlayer: ObservableObject {
             self.padFade = localPadFade
             self.padFadeTarget = localPadFadeTarget
             self.padPendingChord = localPadPendingChord
+            self.padDyn = localPadDyn
             return noErr
         }
 
@@ -627,8 +718,11 @@ final class MidiCurvePlayer: ObservableObject {
     }
 
     private func finishPlayback() {
+        // During offline export the render loop drives completion itself; the
+        // source node's didFinish callback must not tear the engine down.
+        guard !isOfflineRender else { return }
         if let file = exportFile {
-            engine.mainMixerNode.removeTap(onBus: 0)
+            sourceNode?.removeTap(onBus: 0)
             exportFile = nil
             let url = exportURL
             exportURL = nil
@@ -638,6 +732,7 @@ final class MidiCurvePlayer: ObservableObject {
             padFade = 0
             padFadeTarget = 0
             padPendingChord = -1
+            padDyn = 0
             if let url {
                 exportCompletion?(.success(url))
             }
@@ -649,6 +744,12 @@ final class MidiCurvePlayer: ObservableObject {
             padFade = 0
             padFadeTarget = 0
             padPendingChord = -1
+            padDyn = 0
         }
+        engine.mainMixerNode.outputVolume = 1
+        progressTimer?.invalidate()
+        progressTimer = nil
+        progress = 0
+        currentProgress = 0
     }
 }

@@ -6,8 +6,14 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		4B2B04B2302A80E400002701 /* ZeticMLange in Frameworks */ = {isa = PBXBuildFile; productRef = 4B8A00013025685F00000002 /* ZeticMLange */; };
+		4B8A00013025685F00000004 /* Accelerate.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B8A00013025685F00000003 /* Accelerate.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		4B8318723025685F002D30E9 /* MotionTune.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MotionTune.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4B8A00013025685F00000003 /* Accelerate.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Accelerate.framework; path = System/Library/Frameworks/Accelerate.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -23,17 +29,28 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B2B04B2302A80E400002701 /* ZeticMLange in Frameworks */,
+				4B8A00013025685F00000004 /* Accelerate.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		4B2B04B3302A80E400002701 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				4B8A00013025685F00000003 /* Accelerate.framework */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		4B8318693025685F002D30E9 = {
 			isa = PBXGroup;
 			children = (
 				4B8318743025685F002D30E9 /* MotionTune */,
 				4B8318733025685F002D30E9 /* Products */,
+				4B2B04B3302A80E400002701 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -64,6 +81,9 @@
 				4B8318743025685F002D30E9 /* MotionTune */,
 			);
 			name = MotionTune;
+			packageProductDependencies = (
+				4B8A00013025685F00000002 /* ZeticMLange */,
+			);
 			productName = MotionTune;
 			productReference = 4B8318723025685F002D30E9 /* MotionTune.app */;
 			productType = "com.apple.product-type.application";
@@ -92,6 +112,9 @@
 			);
 			mainGroup = 4B8318693025685F002D30E9;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				4B8A00013025685F00000001 /* XCRemoteSwiftPackageReference "ZeticMLangeiOS" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 4B8318733025685F002D30E9 /* Products */;
 			projectDirPath = "";
@@ -330,6 +353,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		4B8A00013025685F00000001 /* XCRemoteSwiftPackageReference "ZeticMLangeiOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/zetic-ai/ZeticMLangeiOS.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.9.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4B8A00013025685F00000002 /* ZeticMLange */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 4B8A00013025685F00000001 /* XCRemoteSwiftPackageReference "ZeticMLangeiOS" */;
+			productName = ZeticMLange;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 4B83186A3025685F002D30E9 /* Project object */;
 }

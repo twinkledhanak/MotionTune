@@ -18,7 +18,7 @@ private enum MTPalette {
 struct ContentView: View {
     @StateObject private var motionManager = MotionManager()
     @StateObject private var midiPlayer = MidiCurvePlayer()
-    @State private var melodyInstrument: Instrument = .piano
+    @StateObject private var zeticModel = ZeticModelManager()
     @State private var exportURL: URL?
     @State private var showExportSheet = false
     @State private var isExporting = false
@@ -38,7 +38,7 @@ struct ContentView: View {
             GeometryReader { geo in
                 // Fit the wave to ~60% of the screen while guaranteeing the
                 // title and controls below stay visible (no overflow).
-                let waveHeight = max(200.0, min(geo.size.height * 0.6, geo.size.height - 480.0))
+                let waveHeight = max(200.0, min(geo.size.height * 0.6, geo.size.height - 500.0))
 
                 VStack(spacing: 16) {
                     Image(systemName: "waveform")
@@ -79,7 +79,11 @@ struct ContentView: View {
              
              */
 
-                SensorGraphView(motionManager: motionManager, height: waveHeight)
+                SensorGraphView(
+                    motionManager: motionManager,
+                    height: waveHeight,
+                    playbackProgress: midiPlayer.isPlaying ? midiPlayer.progress : nil
+                )
                     .padding(.top, 28)
 
                 Text(recordingTimeString)
@@ -108,41 +112,68 @@ struct ContentView: View {
                 Button {
                     startPlayback(quantized: false)
                 } label: {
-                    ElevatedCircleButton(icon: "waveform", label: "Raw", color: MTPalette.rawGreen)
+                    ElevatedCircleButton(
+                        icon: "waveform", label: "Raw", color: MTPalette.rawGreen,
+                        progress: midiPlayer.isPlaying && !midiPlayer.isMelodyPlayback ? midiPlayer.progress : nil
+                    )
                 }
                 .disabled(motionManager.pitchBendSeries.isEmpty || midiPlayer.isPlaying)
 
                 Button {
                     playMelody(instrument: .piano)
                 } label: {
-                    ElevatedCircleButton(icon: "music.note", label: "Piano", color: MTPalette.pianoGreen)
+                    ElevatedCircleButton(
+                        icon: "music.note", label: "Piano", color: MTPalette.pianoGreen,
+                        progress: midiPlayer.isPlaying && midiPlayer.isMelodyPlayback && midiPlayer.instrument == .piano ? midiPlayer.progress : nil
+                    )
                 }
                 .disabled(motionManager.pitchBendSeries.isEmpty || midiPlayer.isPlaying)
 
                 Button {
                     playMelody(instrument: .violin)
                 } label: {
-                    ElevatedCircleButton(icon: "music.quarternote.3", label: "Violin", color: MTPalette.violinGreen)
+                    ElevatedCircleButton(
+                        icon: "music.quarternote.3", label: "Violin", color: MTPalette.violinGreen,
+                        progress: midiPlayer.isPlaying && midiPlayer.isMelodyPlayback && midiPlayer.instrument == .violin ? midiPlayer.progress : nil
+                    )
                 }
                 .disabled(motionManager.pitchBendSeries.isEmpty || midiPlayer.isPlaying)
             }
             .padding(.top, 16)
 
-            Button(action: exportMelody) {
-                Label(isExporting ? "Exporting…" : "Export Melody", systemImage: "square.and.arrow.up")
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(MTPalette.surface, in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(MTPalette.hairline, lineWidth: 1))
-                    .foregroundStyle(.white)
-            }
-            .disabled(motionManager.pitchBendSeries.isEmpty || midiPlayer.isPlaying || isExporting)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding()
         }
         }
         .preferredColorScheme(.dark)
+        .overlay(alignment: .topTrailing) {
+            Menu {
+                Button {
+                    exportMelody(as: .piano)
+                } label: {
+                    Label("Share Piano Tune", systemImage: "music.note")
+                }
+                Button {
+                    exportMelody(as: .violin)
+                } label: {
+                    Label("Share Violin Tune", systemImage: "music.quarternote.3")
+                }
+            } label: {
+                if isExporting {
+                    ProgressView()
+                } else {
+                    Image(systemName: "square.and.arrow.up")
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(MTPalette.surface, in: Circle())
+                }
+            }
+            .disabled(motionManager.pitchBendSeries.isEmpty || midiPlayer.isPlaying || isExporting)
+            .padding(.trailing, 16)
+            .padding(.top, 8)
+        }
+        .task { await zeticModel.load() }
         .sheet(isPresented: $showExportSheet) {
             if let exportURL {
                 ActivityView(items: [exportURL])
@@ -158,6 +189,7 @@ struct ContentView: View {
     private func toggleRecording() {
         if motionManager.isTracking {
             motionManager.stop()
+            zeticModel.runInference(cc11: motionManager.cc11Series)
         } else {
             motionManager.start()
         }
@@ -170,9 +202,12 @@ struct ContentView: View {
 
     private func startPlayback(quantized: Bool) {
         guard !motionManager.pitchBendSeries.isEmpty else { return }
+        let cc11 = quantized && !zeticModel.refinedCC11.isEmpty
+            ? zeticModel.refinedCC11
+            : motionManager.cc11Series
         midiPlayer.loadSeries(
             pitchBend: motionManager.pitchBendSeries,
-            cc11: motionManager.cc11Series,
+            cc11: cc11,
             cc1: motionManager.cc1Series,
             roll: motionManager.rollSeries,
             quantized: quantized
@@ -181,24 +216,26 @@ struct ContentView: View {
     }
 
     private func playMelody(instrument: Instrument) {
-        melodyInstrument = instrument
         midiPlayer.instrument = instrument
         startPlayback(quantized: true)
     }
 
-    private func exportMelody() {
+    private func exportMelody(as instrument: Instrument) {
         guard !motionManager.pitchBendSeries.isEmpty, !midiPlayer.isPlaying else { return }
-        midiPlayer.instrument = melodyInstrument
+        midiPlayer.instrument = instrument
+        let cc11 = !zeticModel.refinedCC11.isEmpty
+            ? zeticModel.refinedCC11
+            : motionManager.cc11Series
         midiPlayer.loadSeries(
             pitchBend: motionManager.pitchBendSeries,
-            cc11: motionManager.cc11Series,
+            cc11: cc11,
             cc1: motionManager.cc1Series,
             roll: motionManager.rollSeries,
             quantized: true
         )
         let url = Self.exportFileURL()
         isExporting = true
-        midiPlayer.playForExport(to: url) { result in
+        midiPlayer.exportToFile(to: url) { result in
             DispatchQueue.main.async {
                 self.isExporting = false
                 if case .success(let url) = result {
@@ -223,6 +260,7 @@ struct ElevatedCircleButton: View {
     let label: String
     let color: Color
     var isSelected: Bool = false
+    var progress: Double? = nil
 
     var body: some View {
         VStack(spacing: 8) {
@@ -240,6 +278,14 @@ struct ElevatedCircleButton: View {
                 Image(systemName: icon)
                     .foregroundColor(.white)
                     .font(.system(size: 26, weight: .medium))
+                // Progress ring: a white arc that fills clockwise with playback.
+                if let progress {
+                    Circle()
+                        .trim(from: 0, to: progress)
+                        .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .frame(width: 66, height: 66)
+                }
             }
             .frame(width: 80, height: 80)
             .shadow(color: color.opacity(isSelected ? 0.5 : 0.25), radius: isSelected ? 16 : 10, y: 8)
@@ -265,13 +311,14 @@ struct ActivityView: UIViewControllerRepresentable {
     ContentView()
 }
 
-/// Voice-Memos-style waveform: a row of vertical bars scrolling left as you
-/// move. Each bar is one short window of time; its height is the CC11
-/// expression amplitude (the "musical energy"). New bars appear on the right,
-/// old ones scroll off, and a faint centre line gives the reference point.
+/// Voice-Memos-style waveform: a row of vertical bars. While recording the
+/// bars scroll left (each bar is one short window of CC11 expression energy).
+/// During playback the full recording is shown, played bars are highlighted in
+/// blue, upcoming bars are dimmed, and a playhead line sweeps across.
 struct SensorGraphView: View {
     @ObservedObject var motionManager: MotionManager
     var height: CGFloat
+    var playbackProgress: Double? = nil
 
     private let bars = 72
     private let samplesPerBar = 4
@@ -295,23 +342,32 @@ struct SensorGraphView: View {
     }
 
     /// Bars grow up and down from the centre line, like a voice-memo waveform.
-    /// Bar height = peak CC11 amplitude over its time bin. Plain thin white
-    /// bars, tightly packed, no colour effects.
+    /// Bar height = peak CC11 amplitude over its time bin. While recording the
+    /// newest samples are shown on the right; during playback the whole take is
+    /// pooled into the same number of bars, played ones in blue, the rest dim.
     private func drawBars(_ context: inout GraphicsContext, size: CGSize) {
         let cc = motionManager.cc11Series
         guard !cc.isEmpty else { return }
 
-        let visible = bars * samplesPerBar
-        let last = cc.count - 1
-        let start = max(0, last - visible + 1)
+        let isPlayback = playbackProgress != nil
         let halfHeight = size.height / 2 - 6
         let barWidth = size.width / CGFloat(bars)
         let gap: CGFloat = 4
 
         for b in 0..<bars {
-            // Rightmost bar (b = bars-1) covers the newest samples.
-            let sampleEnd = last - (bars - 1 - b) * samplesPerBar
-            let sampleStart = max(start, sampleEnd - samplesPerBar + 1)
+            let sampleStart: Int
+            let sampleEnd: Int
+            if isPlayback {
+                let s0 = Int(Double(b) * Double(cc.count) / Double(bars))
+                let s1 = Int(Double(b + 1) * Double(cc.count) / Double(bars)) - 1
+                sampleStart = max(0, s0)
+                sampleEnd = min(cc.count - 1, s1)
+            } else {
+                // Rightmost bar (b = bars-1) covers the newest samples.
+                let last = cc.count - 1
+                sampleEnd = last - (bars - 1 - b) * samplesPerBar
+                sampleStart = max(0, sampleEnd - samplesPerBar + 1)
+            }
             guard sampleStart <= sampleEnd else { continue }
 
             var peak = 0.0
@@ -324,7 +380,16 @@ struct SensorGraphView: View {
             let rect = CGRect(x: x, y: size.height / 2 - height / 2,
                               width: barWidth - gap, height: height)
             let bar = Path(roundedRect: rect, cornerRadius: (barWidth - gap) / 2)
-            context.fill(bar, with: .color(.white))
+
+            if let progress = playbackProgress {
+                if Double(b + 1) / Double(bars) <= progress {
+                    context.fill(bar, with: .color(MTPalette.accentBlue.opacity(0.9)))
+                } else {
+                    context.fill(bar, with: .color(.white))
+                }
+            } else {
+                context.fill(bar, with: .color(.white))
+            }
         }
     }
 }
