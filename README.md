@@ -3,8 +3,15 @@
 Turn your phone's motion into music. Move the device like a theremin: tilt for pitch, sway for volume, rotate for vibrato — and every gesture becomes a playable, exportable MIDI melody.
 
 <p float="left">
-  <img src="IMG_8063.jpeg" width="200" />
-  <img src="IMG_8062.jpeg" width="200" />
+  <img src="IMG_8102.jpeg" width="200" />
+  <img src="IMG_8103.jpeg" width="200" />
+  <img src="IMG_8105.jpeg" width="200" />
+</p>
+<br>
+<p float="left">
+  <img src="IMG_8106.jpeg" width="200" />
+  <img src="IMG_8107.jpeg" width="200" />
+  <img src="IMG_8108.jpeg" width="200" />
 </p>
 
 ## Introduction
