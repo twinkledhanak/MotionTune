@@ -2,14 +2,6 @@ import Foundation
 internal import CoreMotion
 import Combine
 
-/**
-@TODO:
- 1. Your pitch normalization isn't centered
- 2. No smoothing yet.
- 
- 
- */
-
 final class MotionManager: ObservableObject {
     @Published var isTracking = false
     @Published var sampleCount = 0
