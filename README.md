@@ -2,11 +2,23 @@
 
 Turn your phone's motion into music. Move the device like a theremin: tilt for pitch, sway for volume, rotate for vibrato — and every gesture becomes a playable, exportable MIDI melody.
 
+<p float="left">
+  <img src="IMG_8102.jpeg" width="200" />
+  <img src="IMG_8103.jpeg" width="200" />
+  <img src="IMG_8105.jpeg" width="200" />
+</p>
+<br>
+<p float="left">
+  <img src="IMG_8106.jpeg" width="200" />
+  <img src="IMG_8107.jpeg" width="200" />
+  <img src="IMG_8108.jpeg" width="200" />
+</p>
+
 ## Introduction
 
-MotionTune is a motion-controlled music instrument for iOS. The iPhone's built-in motion sensors replace a traditional instrument interface: instead of keys, strings, or buttons, you *perform* by moving the device in space. The app captures those gestures, maps them into three-dimensional MIDI curves (pitch, expression, and modulation), and renders them in real time as an expressive instrument — with an optional AI-refined "melody" pass that snaps the performance to a musical scale.
+MotionTune is a motion-controlled music instrument for iOS. The iPhone's built-in motion sensors replace a traditional instrument interface: instead of keys, strings, or buttons, you *perform* by moving the device in space. The app captures those gestures, maps them into three-dimensional MIDI curves (pitch, expression, and modulation), and renders them in real time as an expressive instrument — with an optional AI-refined "melody" pass that snaps the performance to a musical scale. This app is heavily inspired from the idea of '[Sonification](https://www.perkins.org/resource/sonification-sounds-meaning-activity/)'.
 
-Everything runs on-device. Sensors are sampled locally, MIDI curves are produced locally, and inference (see [Technical implementation](#technical-implementation)) executes on the Apple Neural Engine — no network connection, no cloud round-trip.
+Everything runs on-device. Sensors are sampled locally, MIDI curves are produced locally, and inference (see [Technical implementation](#technical-implementation)) executes via SDK integration with Zetic AI — no network connection, no cloud round-trip.
 
 ## How to use the app
 
@@ -17,7 +29,6 @@ Everything runs on-device. Sensors are sampled locally, MIDI curves are produced
    - **Raw** — the exact recorded MIDI curves, played back as-is.
    - **Piano** — an AI-quantized melody, synthesized with a piano timbre.
    - **Violin** — the same quantized melody, synthesized with a violin timbre.
-5. **Export** — Save the quantized melody as a WAV file and share it anywhere (Files, AirDrop, Messages, etc.).
 
 ### The gesture vocabulary
 
@@ -42,7 +53,7 @@ Note segmentation + quantization  ──  gestures segmented into discrete notes
 Raw MIDI curves (3 dimensions)  ──  pitch bend (14-bit) · CC11 (expression)
       │                           · CC1 (modulation)
       ▼
-Custom AI model (trained on Maestro)
+Transformer + Attention (trained on Maestro)
       │
       ▼
 "Good" MIDI curves  ──  musically refined, natural phrasing & dynamics
@@ -57,11 +68,27 @@ iOS audio plugins / synthesis  ──  AVAudioEngine real-time DSP rendering
 4. **Raw MIDI curves** — Three synchronized curve streams are produced: 14-bit pitch bend (centered at 8192), 7-bit CC11 expression, and 7-bit CC1 modulation.
 5. **Custom AI model (Maestro-trained)** — A model trained on the [Maestro dataset](https://magenta.tensorflow.org/datasets/maestro) learns the difference between mechanical curve input and expressive piano/violin phrasing, refining the raw curves into musical output.
 6. **"Good" MIDI curves** — The refined, de-noised performance curves ready for synthesis.
-7. **iOS plugins / synthesis** — `AVAudioEngine` renders the curves to audio in real time via a pure-DSP source node: additive violin/piano timbres, a chord pad, and a soft-knee limiter (−6 dB) to prevent clipping. Takes can also be rendered offline to WAV for export.
+7. **iOS plugins / synthesis** — `AVAudioEngine` renders the curves to audio in real time via a pure-DSP source node: additive violin/piano timbres, a chord pad, and a soft-knee limiter (−6 dB) to prevent clipping. 
 
 ### Real-time on-device inference with ZETIC AI
 
-The melody-refinement model runs **entirely on-device** using **ZETIC Melange** (formerly MLange). Melange takes the trained model, automatically compiles and quantizes it for the Apple Neural Engine, and exposes a simple Swift API — the raw curves go in, the "good" curves come out, and **no data ever leaves the device**. Model binaries are downloaded once and cached; inference executes on the NPU with zero-copy memory mapping.
+The melody-refinement model runs entirely on-device using ZETIC Melange (formerly MLange). Melange takes the trained model, automatically compiles and quantizes it for the Apple Neural Engine, and exposes a simple Swift API — the raw curves go in, the "good" curves come out, and no data ever leaves the device. Model binaries are downloaded once and cached; inference executes on the NPU with zero-copy memory mapping.
+
+### Model deployment pipeline
+
+1. **Train** — the CurveTransformer model is trained offline (see `training/`) and exported as a CPU-safe PyTorch Exported Program (`.pt2`), along with a sample input `.npy` file defining the fixed input shape.
+2. **Upload** — the `.pt2` and sample input are uploaded to the [Zetic Melange Dashboard](https://mlange.zetic.ai), which compiles the model into a static NPU-targeted graph.
+3. **Optimize** — Melange benchmarks the compiled model across real devices to select the best-performing binary per hardware target.
+4. **Integrate** — once optimization completes, the model is available via the `ZeticMLangeiOS` SDK, referenced by name/version:
+```swift
+   let model = try ZeticMLangeModel(
+       personalKey: PERSONAL_KEY,
+       name: "twinkledhanak/MotionTune",
+       version: 4,
+       modelMode: .RUN_AUTO
+   )
+```
+5. **Run inference** — at runtime, the app loads the compiled binary automatically and runs it directly on the Neural Engine, no manual conversion step needed on-device.
 
 **References (ZETIC Melange):**
 - [ZETIC Melange — documentation home](https://docs.zetic.ai/)
@@ -71,9 +98,3 @@ The melody-refinement model runs **entirely on-device** using **ZETIC Melange** 
 - [`ZeticMLangeModel` — iOS API reference](https://docs.zetic.ai/api-reference/ios/ZeticMLangeModel)
 - [ZeticMLangeiOS — Swift package (SPM)](https://github.com/zetic-ai/ZeticMLangeiOS)
 - [ZETIC Melange sample apps](https://github.com/zetic-ai/ZETIC_Melange_apps)
-
-## Requirements
-
-- iOS 26.5+
-- Xcode 16+
-- A physical device with CoreMotion and an Apple Neural Engine (A11+) for AI inference
